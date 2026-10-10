@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Diagrama Reto 2</title>
+<style>
+  @page { size: 1400px 860px; margin: 0; }
+  html, body { margin: 0; background: #fff; }
+  svg { display: block; font-family: "Segoe UI", Arial, sans-serif; }
+  .t { font-size: 17px; font-weight: 600; fill: #111; }
+  .s { font-size: 13px; fill: #444; }
+  .h { font-size: 22px; font-weight: 700; fill: #111; }
+  .lbl { font-size: 12.5px; fill: #333; }
+</style>
+</head>
+<body>
+<svg width="1400" height="860" viewBox="0 0 1400 860" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c62828"/>
+    </marker>
+  </defs>
+
+  <text x="40" y="38" class="h">Reto 2 · La caja negra: arquitectura</text>
+  <text x="40" y="60" class="s">Jaissel Nicol Pérez Marten · Frontier BOG/26</text>
+
+  <!-- Zona exploración -->
+  <rect x="25" y="80" width="690" height="755" rx="14" fill="#f6f8fb" stroke="#9fb3c8" stroke-dasharray="6 5"/>
+  <text x="45" y="106" class="t" fill="#2b4a6b">Exploración y medición (local, token personal)</text>
+
+  <!-- Original -->
+  <rect x="45" y="125" width="300" height="95" rx="10" fill="#263238"/>
+  <text x="65" y="158" class="t" fill="#fff" style="fill:#fff">Servicio original (caja negra)</text>
+  <text x="65" y="182" class="s" style="fill:#cfd8dc">POST /msg · POST /__reset · GET /health</text>
+  <text x="65" y="202" class="s" style="fill:#cfd8dc">cambia durante el día (incidente 15:30)</text>
+
+  <!-- Explorador -->
+  <rect x="45" y="300" width="300" height="95" rx="10" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text x="65" y="333" class="t">A · Explorador</text>
+  <text x="65" y="356" class="s">enviar.py + fuzzer de 1 carácter</text>
+  <text x="65" y="376" class="s">una hipótesis por request · ≤ 8 rps</text>
+
+  <path d="M150 300 L150 222" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+  <path d="M240 222 L240 300" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+  <text x="58" y="262" class="lbl">request</text>
+  <text x="250" y="262" class="lbl">status, cuerpo, X-Req</text>
+
+  <!-- Log -->
+  <rect x="45" y="475" width="300" height="80" rx="10" fill="#fff8e1" stroke="#b28704" stroke-width="1.5"/>
+  <text x="65" y="508" class="t">experimentos.jsonl</text>
+  <text x="65" y="532" class="s">id · seq · x_req · hipótesis · conclusión</text>
+  <path d="M195 395 L195 473" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+  <!-- Spec -->
+  <rect x="45" y="640" width="300" height="95" rx="10" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="65" y="673" class="t">Especificación</text>
+  <text x="65" y="696" class="s">7 secciones · ID | Comportamiento |</text>
+  <text x="65" y="716" class="s">Evidencia (id del log) | Confianza</text>
+  <path d="M195 555 L195 638" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+  <text x="205" y="602" class="lbl">evidencia por id</text>
+
+  <!-- Oraculo -->
+  <rect x="395" y="475" width="290" height="80" rx="10" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text x="415" y="508" class="t">Oráculo de secuencias</text>
+  <text x="415" y="532" class="s">20 ejemplos + ≥60 secuencias propias</text>
+  <path d="M345 515 L393 515" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+  <!-- Replayer -->
+  <rect x="395" y="640" width="290" height="95" rx="10" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text x="415" y="673" class="t">C · Replayer / diff</text>
+  <text x="415" y="696" class="s">compara status + JSON (regla del set)</text>
+  <text x="415" y="716" class="s">% pasos idénticos · regresión horaria</text>
+  <path d="M540 555 L540 638" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+  <!-- Regresión al original -->
+  <path d="M395 165 L345 165" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)" stroke-dasharray="5 4"/>
+  <rect x="395" y="125" width="290" height="80" rx="10" fill="#fff" stroke="#777" stroke-dasharray="5 4"/>
+  <text x="415" y="157" class="t">Re-grabación del oráculo</text>
+  <text x="415" y="181" class="s">cada hora y tras 15:30 → detecta cambios</text>
+
+  <!-- Evaluador -->
+  <rect x="760" y="80" width="615" height="70" rx="10" fill="#ede7f6" stroke="#5e35b1" stroke-width="1.5"/>
+  <text x="780" y="110" class="t">Evaluador Frontier · set oculto (100 tests, 3 corridas)</text>
+  <text x="780" y="132" class="s">POST /__reset antes de cada test · 5 s por paso · token del equipo</text>
+  <path d="M1067 150 L1067 190" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+  <!-- Clon -->
+  <rect x="760" y="192" width="615" height="643" rx="14" fill="#e3f2fd" stroke="#1565c0" stroke-width="2"/>
+  <text x="780" y="222" class="t" style="fill:#0d47a1">B · Reemplazo · FastAPI · 1 proceso en Railway (réplicas = 1)</text>
+
+  <g>
+    <rect x="790" y="240" width="370" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+    <text x="808" y="265" class="t">1 · Auth</text>
+    <text x="808" y="286" class="s">Bearer = TOKEN_EQUIPO (env) · si no, error del original</text>
+
+    <rect x="790" y="318" width="370" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+    <text x="808" y="343" class="t">2 · Router</text>
+    <text x="808" y="364" class="s">/health · /__reset · /msg · catch-all (rutas inexistentes)</text>
+
+    <rect x="790" y="396" width="370" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+    <text x="808" y="421" class="t">3 · Parser</text>
+    <text x="808" y="442" class="s">{"m"} → CMD ; args ; control · aridad</text>
+
+    <rect x="790" y="474" width="370" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+    <text x="808" y="499" class="t">4 · Integridad</text>
+    <text x="808" y="520" class="s">dígito de control (E201 mal formado / E202 inválido)</text>
+
+    <rect x="790" y="552" width="370" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+    <text x="808" y="577" class="t">5 · Comandos</text>
+    <text x="808" y="598" class="s">PING · ALTA · CONSULTA · DEPOSITO · TRANSFER · ANULA</text>
+
+    <rect x="790" y="630" width="370" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+    <text x="808" y="655" class="t">6 · Estado en memoria</text>
+    <text x="808" y="676" class="s">cuentas · operaciones · contadores AC/OP</text>
+
+    <rect x="790" y="708" width="370" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+    <text x="808" y="733" class="t">7 · Formateador</text>
+    <text x="808" y="754" class="s">JSON literal (respeta "recieved", espacios, claves)</text>
+
+    <path d="M975 298 L975 316" stroke="#1565c0" stroke-width="1.6" marker-end="url(#a)"/>
+    <path d="M975 376 L975 394" stroke="#1565c0" stroke-width="1.6" marker-end="url(#a)"/>
+    <path d="M975 454 L975 472" stroke="#1565c0" stroke-width="1.6" marker-end="url(#a)"/>
+    <path d="M975 532 L975 550" stroke="#1565c0" stroke-width="1.6" marker-end="url(#a)"/>
+    <path d="M975 610 L975 628" stroke="#1565c0" stroke-width="1.6" marker-end="url(#a)"/>
+    <path d="M975 688 L975 706" stroke="#1565c0" stroke-width="1.6" marker-end="url(#a)"/>
+  </g>
+
+  <!-- Config lateral -->
+  <rect x="1185" y="318" width="170" height="214" rx="8" fill="#fffde7" stroke="#b28704"/>
+  <text x="1200" y="345" class="t">Tabla de errores</text>
+  <text x="1200" y="368" class="s">código · status ·</text>
+  <text x="1200" y="386" class="s">mensaje · prioridad</text>
+  <text x="1200" y="420" class="t">Flag de versión</text>
+  <text x="1200" y="443" class="s">mañana / tarde</text>
+  <text x="1200" y="461" class="s">(cambio de 15:30)</text>
+  <text x="1200" y="495" class="s">datos, no código:</text>
+  <text x="1200" y="513" class="s">se corrige en minutos</text>
+  <path d="M1185 425 L1162 425" stroke="#b28704" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="1185" y="630" width="170" height="58" rx="8" fill="#fff" stroke="#1565c0"/>
+  <text x="1200" y="655" class="s">POST /__reset</text>
+  <text x="1200" y="674" class="s">vacía el estado</text>
+  <path d="M1185 659 L1162 659" stroke="#1565c0" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Replayer -> clon -->
+  <path d="M685 700 L788 700" stroke="#333" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+  <text x="694" y="690" class="lbl">misma secuencia</text>
+
+  <!-- Prohibido -->
+  <rect x="790" y="782" width="565" height="38" rx="8" fill="#ffebee" stroke="#c62828"/>
+  <text x="808" y="806" class="lbl" style="fill:#c62828;font-weight:600">✕ El reemplazo nunca llama al original: lógica y estado propios</text>
+</svg>
+</body>
+</html>

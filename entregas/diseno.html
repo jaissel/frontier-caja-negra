@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Diseño Reto 2</title>
+<style>
+  @page { size: A4; margin: 7mm 9mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 7.55pt; line-height: 1.24; color: #1a1a1a; margin: 0; }
+  h1 { font-size: 14pt; margin: 0 0 1mm; }
+  .meta { color: #555; font-size: 8pt; margin-bottom: 2.5mm; }
+  h2 { font-size: 9pt; margin: 1.8mm 0 1mm; padding-bottom: .6mm; border-bottom: 1.5px solid #222; }
+  p { margin: 0 0 1.2mm; }
+  ul { margin: 0 0 1.2mm; padding-left: 4.5mm; }
+  li { margin-bottom: .5mm; }
+  table { width: 100%; border-collapse: collapse; margin: .8mm 0 1.2mm; }
+  th, td { border: 1px solid #bbb; padding: .5mm 1.2mm; vertical-align: top; text-align: left; }
+  th { background: #eee; font-weight: 600; }
+  code { font-family: Consolas, monospace; font-size: 7.2pt; background: #f2f2f2; padding: 0 .6mm; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+  .tag { font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Reto 2 · La caja negra: doc de diseño</h1>
+<div class="meta">Jaissel Nicol Pérez Marten · Frontier BOG/26 · 10 oct 2026 · Diagrama de arquitectura adjunto</div>
+
+<h2>1. Entendimiento del problema</h2>
+<p><span class="tag">Qué resolvemos:</span> un reemplazo que, tras <code>POST /__reset</code>, responda a secuencias de 1 a 12 requests con el <b>mismo status y el mismo cuerpo</b> que el original, errores, rutas inexistentes y autenticación incluidos. Además: una especificación en la que cada afirmación cite el log, y un log de experimentos con hipótesis. El éxito se mide con los 100 tests ocultos (solo 3 corridas) evaluados contra la versión vigente a las 20:00.</p>
+<p><span class="tag">Lo que ya muestran los 20 ejemplos:</span> un protocolo de texto <code>CMD;arg…;control</code> dentro de <code>{"m": …}</code>. Parece un mini core bancario (<code>PING, ALTA, CONSULTA, DEPOSITO, TRANSFER, ANULA</code>) con familias de error E2xx (integridad), E3xx (sintaxis), E4xx (inexistente) y E5xx (negocio), y con estado por token (contadores <code>AC-000N</code> y <code>OP-000N</code>).</p>
+<div class="cols">
+<div>
+<p><span class="tag">Supuestos (a validar con el log):</span></p>
+<ul>
+  <li><b>S1</b> El último campo es un dígito de control calculado sobre el resto del mensaje (<code>ALTA;Lucia;83</code> falla y <code>;82</code> pasa). Es la primera puerta: sin él, nada funciona.</li>
+  <li><b>S2</b> Los contadores AC/OP son por token y vuelven a 1 con el reset.</li>
+  <li><b>S3</b> <code>ANULA</code> revierte saldos: AC-0002 vuelve a 40000 y luego falla una transferencia de 50000.</li>
+  <li><b>S4</b> TRANSFER tiene un límite. 120000 falla y 100000 pasa: ¿es por operación o acumulado? Está por probar.</li>
+  <li><b>S5</b> El servicio cambia durante el día (hay un incidente anunciado a las 15:30).</li>
+</ul>
+</div>
+<div>
+<p><span class="tag">Casos difíciles:</span></p>
+<ul>
+  <li>El <b>orden de evaluación</b> cuando un mensaje dispara varios errores (E201/E202/E301/E302/E401/E5xx).</li>
+  <li>La respuesta sin token, con token ajeno, con cuerpo vacío o no-JSON, y en rutas o métodos inexistentes.</li>
+  <li>Montos en 0, negativos, decimales o enormes. Transferencias a la misma cuenta. Anular algo inexistente.</li>
+  <li>Rarezas que hay que copiar <b>literalmente</b>: <code>"recieved"</code>, <code>cuentaId</code> vs <code>cuenta_id</code>, el espacio final en <code>"comando desconocido "</code>, <code>CONSULTa</code> aceptado.</li>
+</ul>
+<p><span class="tag">Fuera de alcance (y por qué):</span> la persistencia entre reinicios, porque el set hace reset antes de cada test. Los headers, porque no se comparan (pero <code>X-Req</code> sí se registra en el log). El escalado horizontal, porque el set le habla a un solo proceso.</p>
+</div>
+</div>
+
+<h2>2. Arquitectura y trade-offs</h2>
+<p><b>Tres componentes.</b> (A) El <b>explorador</b> (<code>enviar.py</code> + un fuzzer propio): consulta el original con el token personal y escribe cada request en <code>experimentos.jsonl</code> con su hipótesis. (B) El <b>reemplazo</b>: un servicio FastAPI organizado como pipeline <i>Auth → Router → Parser → Integridad → Comandos → Estado → Formateador</i>. (C) El <b>replayer</b>: corre las mismas secuencias contra el oráculo grabado y contra el clon, y compara con la misma regla del set. <b>El clon nunca llama al original.</b></p>
+<table>
+  <tr><th style="width:17%">Decisión</th><th style="width:23%">Elegido</th><th style="width:21%">Descartado</th><th>Por qué</th></tr>
+  <tr><td>Lógica del clon</td><td>Reglas deterministas en código</td><td>LLM dentro del clon</td><td>Se exige el texto idéntico carácter por carácter y menos de 5 s. Un LLM no garantiza strings exactos y además cuesta.</td></tr>
+  <tr><td>Estado</td><td>Diccionarios en memoria + reset</td><td>Postgres / Redis</td><td>Hay un solo proceso y un reset antes de cada test. Una DB suma latencia y otro punto de falla, sin beneficio.</td></tr>
+  <tr><td>Errores y textos</td><td>Una tabla de datos (código, status, mensaje, prioridad)</td><td>Strings dispersos en el código</td><td>Permite corregir textos y el orden de evaluación en minutos después del cambio de las 15:30.</td></tr>
+  <tr><td>Versiones</td><td>Comportamiento por versión (mañana/tarde) con un flag</td><td>Sobrescribir la lógica</td><td>Permite documentar el cambio y volver atrás si el diagnóstico estaba mal.</td></tr>
+  <tr><td>Framework</td><td>FastAPI (Python)</td><td>Flask, Node/Express</td><td>Python ya está en el entorno, el control explícito de status y cuerpo es simple y el catch-all de rutas es fácil.</td></tr>
+  <tr><td>Despliegue</td><td>Railway, 1 réplica, siempre encendido</td><td>Túnel local, serverless</td><td>Un túnel se cae si se apaga el PC durante el debrief. Serverless reinicia el estado y puede levantar varias instancias.</td></tr>
+  <tr><td>Exploración</td><td>Hipótesis manuales + fuzzer de un carácter</td><td>Fuzzing aleatorio masivo</td><td>Hay 8.000 req/día y 10 rps. Cada request debe probar algo para que sirva de evidencia en la spec.</td></tr>
+</table>
+
+<h2>3. Plan para medir (antes de construir)</h2>
+<table>
+  <tr><th style="width:5%">ID</th><th style="width:44%">Prueba</th><th>Métrica y meta</th></tr>
+  <tr><td>M1</td><td>Replay de los 20 ejemplos contra el clon local</td><td>20/20 idénticos antes del primer despliegue</td></tr>
+  <tr><td>M2</td><td>Suite propia de ≥60 secuencias con la forma del set (40% de 1 req, 45% de 2–5, 15% de 6–12), grabadas del original como oráculo</td><td>% de pasos idénticos y % de tests completos. Meta ≥90% antes de gastar una corrida del set oculto</td></tr>
+  <tr><td>M3</td><td>Matriz de errores: un mensaje por cada par de errores que dispara ambos a la vez</td><td>El orden total de evaluación queda determinado. Cada código E### con ≥2 evidencias pasa a "confirmado"</td></tr>
+  <tr><td>M4</td><td>Regresión: re-ejecutar M2 contra el original cada hora y justo después de las 15:30</td><td>0 diffs no explicados. Cada diff queda como fila en "Cambios durante el día"</td></tr>
+  <tr><td>M5</td><td>Uso planificado de las 3 corridas del set oculto</td><td>~14:30 línea base · ~18:00 después del incidente · ~19:30 final</td></tr>
+  <tr><td>M6</td><td>Latencia y disponibilidad del entrypoint</td><td>p95 &lt; 300 ms (el límite es 5 s). <code>/health</code> en 200 durante todo el debrief</td></tr>
+  <tr><td>M7</td><td>Calidad de la spec</td><td>100% de las filas citan ≥1 id del log. Cero afirmaciones "confirmado" sin repetición</td></tr>
+</table>
+<p><span class="tag">Riesgos principales:</span> que no se descubra el dígito de control (es la prioridad #1, se ataca con fuzzing variando un carácter a la vez); que el cambio de las 15:30 rompa el clon (se mitiga con la regresión M4 y la tabla de errores como datos); el rate limit (throttle a 8 rps); que la plataforma levante varias instancias (réplicas fijadas en 1).</p>
+
+</body>
+</html>

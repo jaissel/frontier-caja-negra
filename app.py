@@ -1,0 +1,201 @@
+"""Reemplazo de la caja negra (Reto 2, Frontier).
+
+Pipeline de cada request a POST /msg (en este orden, igual que el original):
+  ruta -> auth -> JSON -> campo m -> separadores -> segmentos vacíos -> PING
+  -> formato del control -> valor del control -> comando -> aridad -> reglas del comando
+"""
+import json
+import os
+import re
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from control import control
+
+TOKEN = os.environ.get("TOKEN_EQUIPO", "").strip()
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+# ---------- Tabla de errores (datos, no código: se corrige rápido si el original cambia) ----------
+ERRORES = {
+    "E001": (401, "no autorizado"),
+    "E100": (400, "json inválido"),
+    "E102": (400, "falta m"),
+    "E103": (400, "falta control"),
+    "E104": (400, "segmento vacío"),
+    "E201": (400, "control mal formado"),
+    "E202": (400, "control inválido"),
+    "E301": (400, "comando desconocido "),  # el espacio final es del original
+    "E302": (400, "aridad inválida"),
+    "E303": (400, "monto inválido"),
+    "E304": (400, "origen y destino iguales"),
+    "E401": (404, "cuenta inexistente"),
+    "E402": (404, "operación inexistente"),
+    "E404": (404, "ruta desconocida"),
+    "E506": (422, "límite excedido"),
+    "E507": (422, "saldo insuficiente"),
+}
+
+# Comandos y cuántos argumentos llevan (sin contar el comando ni el control)
+ARIDAD = {"PING": 0, "ALTA": 1, "CONSULTA": 1, "DEPOSITO": 2, "TRANSFER": 3, "ANULA": 1}
+LIMITE_TRANSFER = 100000
+MONTO_OK = re.compile(r"[1-9][0-9]{0,9}")   # entero positivo, sin ceros a la izquierda, hasta 10 dígitos
+CONTROL_OK = re.compile(r"[0-9]{1,2}")
+
+RUTAS = {("GET", "/health"), ("POST", "/__reset"), ("POST", "/msg")}
+
+
+# ---------- Estado en memoria ----------
+class Estado:
+    def __init__(self):
+        self.cuentas = {}       # "AC-0001" -> saldo
+        self.operaciones = {}   # "OP-0001" -> dict(tipo, monto, origen, destino, anulada)
+        self.n_cuentas = 0
+        self.n_ops = 0
+
+
+estado = Estado()
+
+
+def error(codigo, **extra):
+    status, mensaje = ERRORES[codigo]
+    return JSONResponse({"error": codigo, "mensaje": mensaje, **extra}, status_code=status)
+
+
+def ok(cuerpo, status=200):
+    return JSONResponse(cuerpo, status_code=status)
+
+
+def distancia(a, b):
+    """Distancia de Levenshtein."""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def sugerencia(cmd):
+    mejor = min(ARIDAD, key=lambda c: distancia(cmd, c))
+    return mejor if distancia(cmd, mejor) <= 2 else None
+
+
+def nueva_op(**datos):
+    estado.n_ops += 1
+    op_id = f"OP-{estado.n_ops:04d}"
+    estado.operaciones[op_id] = {**datos, "anulada": False}
+    return ok({"status": "recieved", "operacionId": op_id})  # "recieved" mal escrito, igual que el original
+
+
+# ---------- Comandos ----------
+def cmd_alta(nombre):
+    estado.n_cuentas += 1
+    cuenta = f"AC-{estado.n_cuentas:04d}"
+    estado.cuentas[cuenta] = 0
+    return ok({"cuentaId": cuenta}, 201)
+
+
+def cmd_consulta(cuenta):
+    if cuenta not in estado.cuentas:
+        return error("E401")
+    return ok({"cuenta_id": cuenta, "saldo": estado.cuentas[cuenta]})
+
+
+def cmd_deposito(cuenta, monto):
+    if not MONTO_OK.fullmatch(monto):
+        return error("E303")
+    if cuenta not in estado.cuentas:
+        return error("E401")
+    monto = int(monto)
+    estado.cuentas[cuenta] += monto
+    return nueva_op(tipo="DEPOSITO", monto=monto, destino=cuenta)
+
+
+def cmd_transfer(origen, destino, monto):
+    if not MONTO_OK.fullmatch(monto):
+        return error("E303")
+    if origen == destino:
+        return error("E304")
+    if origen not in estado.cuentas or destino not in estado.cuentas:
+        return error("E401")
+    monto = int(monto)
+    if monto > LIMITE_TRANSFER:
+        return error("E506")
+    if estado.cuentas[origen] < monto:
+        return error("E507")
+    estado.cuentas[origen] -= monto
+    estado.cuentas[destino] += monto
+    return nueva_op(tipo="TRANSFER", monto=monto, origen=origen, destino=destino)
+
+
+def cmd_anula(op_id):
+    op = estado.operaciones.get(op_id)
+    if op is None:
+        return error("E402")
+    if op["anulada"]:
+        return ok({"ok": False, "motivo": "ya anulada"})
+    op["anulada"] = True
+    estado.cuentas[op["destino"]] -= op["monto"]  # puede quedar negativo, como en el original
+    if op["tipo"] == "TRANSFER":
+        estado.cuentas[op["origen"]] += op["monto"]
+    return ok({"ok": True, "anulada": op_id})
+
+
+COMANDOS = {"ALTA": cmd_alta, "CONSULTA": cmd_consulta, "DEPOSITO": cmd_deposito,
+            "TRANSFER": cmd_transfer, "ANULA": cmd_anula}
+
+
+def procesar(m):
+    if ";" not in m:
+        return error("E103")
+    seg = m.split(";")
+    if any(s == "" for s in seg):
+        return error("E104")
+
+    # PING se atiende antes de mirar el control: no lo valida
+    if seg[0].upper() == "PING":
+        return ok({"pong": True}) if len(seg) == 2 else error("E302")
+
+    ctl = seg[-1]
+    if not CONTROL_OK.fullmatch(ctl):
+        return error("E201")
+    if int(ctl) != control(";".join(seg[:-1])):
+        return error("E202")
+
+    cmd = seg[0].upper()
+    if cmd not in COMANDOS:
+        sug = sugerencia(cmd)
+        return error("E301", sugerencia=sug) if sug else error("E301")
+
+    args = seg[1:-1]
+    if len(args) != ARIDAD[cmd]:
+        return error("E302")
+    return COMANDOS[cmd](*args)
+
+
+# ---------- HTTP ----------
+@app.api_route("/{ruta:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+async def todo(ruta: str, request: Request):
+    global estado
+    if (request.method, request.url.path) not in RUTAS:
+        return error("E404")  # el original responde 404 aun sin token
+    if not TOKEN or request.headers.get("authorization") != f"Bearer {TOKEN}":
+        return error("E001")
+
+    if request.url.path == "/health":
+        return ok({"ok": True})
+    if request.url.path == "/__reset":
+        estado = Estado()
+        return ok({"ok": True})
+
+    crudo = await request.body()
+    try:
+        cuerpo = json.loads(crudo)
+    except (ValueError, UnicodeDecodeError):
+        return error("E100")
+    if not isinstance(cuerpo, dict) or not isinstance(cuerpo.get("m"), str):
+        return error("E102")
+    return procesar(cuerpo["m"])
