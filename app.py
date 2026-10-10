@@ -35,10 +35,13 @@ ERRORES = {
     "E404": (404, "ruta desconocida"),
     "E506": (422, "límite excedido"),
     "E507": (422, "saldo insuficiente"),
+    "E520": (409, "operación destructiva: detiene el servicio; reenvía con confirmación"),
+    "E599": (503, "service halted"),
 }
 
 # Comandos y cuántos argumentos llevan (sin contar el comando ni el control)
-ARIDAD = {"PING": 0, "ALTA": 1, "CONSULTA": 1, "DEPOSITO": 2, "TRANSFER": 3, "ANULA": 1}
+# El orden importa: en un empate de la sugerencia gana el primero (ALT -> ALTA, no HALT)
+ARIDAD = {"PING": 0, "ALTA": 1, "CONSULTA": 1, "DEPOSITO": 2, "TRANSFER": 3, "ANULA": 1, "HALT": 1}
 LIMITE_TRANSFER = 100000
 MONTO_OK = re.compile(r"[1-9][0-9]{0,9}")   # entero positivo, sin ceros a la izquierda, hasta 10 dígitos
 CONTROL_OK = re.compile(r"[0-9]{1,2}")
@@ -53,6 +56,7 @@ class Estado:
         self.operaciones = {}   # "OP-0001" -> dict(tipo, monto, origen, destino, anulada)
         self.n_cuentas = 0
         self.n_ops = 0
+        self.detenido = False   # HALT;1 detiene el servicio hasta el próximo reset
 
 
 estado = Estado()
@@ -144,7 +148,15 @@ def cmd_anula(op_id):
     return ok({"ok": True, "anulada": op_id})
 
 
-COMANDOS = {"ALTA": cmd_alta, "CONSULTA": cmd_consulta, "DEPOSITO": cmd_deposito,
+def cmd_halt(confirmacion):
+    # Comando oculto: solo "1" confirma; cualquier otro valor pide confirmación
+    if confirmacion != "1":
+        return error("E520")
+    estado.detenido = True
+    return error("E599")
+
+
+COMANDOS = {"HALT": cmd_halt, "ALTA": cmd_alta, "CONSULTA": cmd_consulta, "DEPOSITO": cmd_deposito,
             "TRANSFER": cmd_transfer, "ANULA": cmd_anula}
 
 
@@ -177,6 +189,10 @@ def procesar(m):
 
 
 # ---------- HTTP ----------
+def _sin_constantes(nombre):
+    raise ValueError(nombre)
+
+
 @app.api_route("/{ruta:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
 async def todo(ruta: str, request: Request):
     global estado
@@ -191,9 +207,13 @@ async def todo(ruta: str, request: Request):
         estado = Estado()
         return ok({"ok": True})
 
+    if estado.detenido:
+        return error("E599")  # detenido: todo /msg da 503, incluso con JSON roto
+
     crudo = await request.body()
     try:
-        cuerpo = json.loads(crudo)
+        # Igual que el original: BOM inicial, NaN e Infinity son JSON inválido
+        cuerpo = json.loads(crudo.decode("utf-8"), parse_constant=_sin_constantes)
     except (ValueError, UnicodeDecodeError):
         return error("E100")
     if not isinstance(cuerpo, dict) or not isinstance(cuerpo.get("m"), str):

@@ -23,6 +23,8 @@ Resumen: un mini core bancario. Recibe mensajes de texto `COMANDO;arg1;…;contr
 | IN-09 | El JSON debe ser un objeto con un campo `m` de tipo string. Si falta `m`, es número, es `null`, el cuerpo es un array o es un string JSON suelto: `400 E102 "falta m"`. | #2482–#2484, #2486, #2491 | confirmado |
 | IN-10 | Los campos extra del objeto se ignoran. | #2487 | confirmado |
 | IN-11 | No se observó un límite de longitud para `m`: se aceptaron 300 y 2000 caracteres. | #2489, #2490 | probable |
+| IN-13 | El JSON se lee de forma estricta: un BOM al inicio da E100 y `NaN` da E100. Con claves duplicadas gana la última. El `Content-Type` no importa: un `text/plain` con JSON válido funciona. La clave debe ser `m` en minúscula (`M` da E102), y `null` o un número como cuerpo dan E102. | #3108, #3115, #3109, #3107, #3110, #3113, #3114 | confirmado |
+| IN-14 | `HEAD` y `OPTIONS` dan 404. Los parámetros de la URL (`?x=1`) se ignoran. `Bearer` con doble espacio da 401. | #3102–#3106 | confirmado |
 | IN-12 | Cada token tiene un estado propio. | README; mi token siempre empezó desde cero tras el reset | probable |
 
 ## 2. Integridad
@@ -47,7 +49,7 @@ El comando no distingue mayúsculas (`consulta`, `CONSULTa`, `ping`). Aridad = n
 |---|---|---|---|
 | CM-01 | Si el comando es desconocido y el control es válido, responde `400 {"error":"E301","mensaje":"comando desconocido "}`. El mensaje termina con un **espacio**. | #2505, #2621, #2625, ej.12 | confirmado |
 | CM-02 | Si el comando desconocido está a una **distancia de edición (Levenshtein) ≤ 2** de un comando real (comparando en mayúsculas), E301 agrega `"sugerencia":"<COMANDO>"`. Con distancia 3 o más no hay sugerencia. Un espacio antes o después cuenta como 1 edición. | #2513, #2514, #2609–#2627, #2643–#2653, #2658 | confirmado |
-| CM-03 | Si dos comandos empatan en distancia, se sugiere el primero en el orden PING, ALTA, CONSULTA, DEPOSITO, TRANSFER, ANULA. | — | supuesto |
+| CM-03 | La lista de sugerencias incluye el comando oculto `HALT` (`HELP`, `HOLD` y `WAIT` sugieren HALT). Si dos comandos empatan en distancia, gana el primero del orden PING, ALTA, CONSULTA, DEPOSITO, TRANSFER, ANULA, HALT: `ALT` y `AL` empatan entre ALTA y HALT, y sugieren ALTA. | #2888, #2942, #3092, #2616, #2651 | probable |
 | CM-04 | Con aridad incorrecta y control válido, responde `400 E302 "aridad inválida"`. | #2508, #2553, #2590, #2628–#2630, ej.20 | confirmado |
 
 **PING** · `PING;<cualquiera>` (aridad 0)
@@ -99,6 +101,14 @@ El comando no distingue mayúsculas (`consulta`, `CONSULTa`, `ping`). Aridad = n
 | CM-N3 | Anular algo ya anulado responde `200 {"ok":false,"motivo":"ya anulada"}`, sin error HTTP. | #2589, ej.14 | confirmado |
 | CM-N4 | Si la operación no existe (incluidos `op-0002` en minúsculas o un id de cuenta), responde `404 E402 "operación inexistente"`. | #2584–#2586 | confirmado |
 
+**HALT (comando oculto)** · `HALT;<confirmación>;ctl` (aridad 1). No aparece en los ejemplos: lo descubrí porque `HELP` sugería `HALT`.
+
+| ID | Comportamiento | Evidencia | Confianza |
+|---|---|---|---|
+| CM-H1 | Con aridad distinta de 1 responde E302. El control se valida antes (`HALT;0` da E202). | #2925, #2928, #2929, #2930 | confirmado |
+| CM-H2 | Con cualquier argumento distinto de exactamente `1` responde `409 {"error":"E520","mensaje":"operación destructiva: detiene el servicio; reenvía con confirmación"}`. Ni reenviar el mensaje ni un campo `confirm` en el JSON cuentan como confirmación. | #2927, #2972, #2973, #2977–#2985, #3005–#3008, #3010, #3011 | confirmado |
+| CM-H3 | `HALT;1` **detiene el servicio** y responde `503 {"error":"E599","mensaje":"service halted"}`. | #2986, #2997 | confirmado |
+
 ## 4. Memoria entre requests
 
 | ID | Comportamiento | Evidencia | Confianza |
@@ -106,6 +116,7 @@ El comando no distingue mayúsculas (`consulta`, `CONSULTa`, `ping`). Aridad = n
 | ME-01 | Se recuerdan las cuentas, sus saldos y las operaciones con su estado de anulación. | #2550, #2564, #2589 | confirmado |
 | ME-02 | Los contadores AC y OP son secuenciales, independientes entre sí y vuelven a 1 con el reset. | #2536–#2542, #2555–#2558 | confirmado |
 | ME-03 | Una operación rechazada no consume número de OP. Anular tampoco: la siguiente operación sigue la secuencia. | #2559, #2560, #2587 | confirmado |
+| ME-05 | Después de `HALT;1`, **todo** `POST /msg` responde `503 E599`, incluidos un JSON roto, PING y los errores de control. `/health` sigue en 200, las rutas inexistentes dan 404 y sin token da 401. Solo `POST /__reset` lo repara. | #2995, #2998–#3004, #2996 | confirmado |
 | ME-04 | El header `X-Req` es un contador de requests del token que **no** vuelve a cero con el reset (en #2631 vale 2615). Los headers no se comparan, así que el reemplazo no lo replica. | campo `x_req` del log | probable |
 
 ## 5. Errores (orden de evaluación)
@@ -116,6 +127,7 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 |---|---|---|---|---|
 | 1 | E404 | 404 | `{"error":"E404","mensaje":"ruta desconocida"}` | #2469–#2478 |
 | 2 | E001 | 401 | `{"error":"E001","mensaje":"no autorizado"}` | #2463–#2468 |
+| 2b | E599 | 503 | `{"error":"E599","mensaje":"service halted"}` (solo si el servicio está detenido por HALT) | #3001–#3004 |
 | 3 | E100 | 400 | `{"error":"E100","mensaje":"json inválido"}` | #2479–#2481 |
 | 4 | E102 | 400 | `{"error":"E102","mensaje":"falta m"}` | #2482–#2486 |
 | 5 | E103 | 400 | `{"error":"E103","mensaje":"falta control"}` | #4, #2494 |
@@ -128,6 +140,7 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | 12 | E303 | 400 | `{"error":"E303","mensaje":"monto inválido"}` | #2554, #2600 |
 | 13 | E304 | 400 | `{"error":"E304","mensaje":"origen y destino iguales"}` | #2601, #2602 |
 | 14 | E401 / E402 | 404 | `{"error":"E401","mensaje":"cuenta inexistente"}` / `{"error":"E402","mensaje":"operación inexistente"}` | #2573, #2584 |
+| 14b | E520 / E599 | 409 / 503 | HALT: `{"error":"E520","mensaje":"operación destructiva: detiene el servicio; reenvía con confirmación"}` / `{"error":"E599","mensaje":"service halted"}` | #2927, #2997 |
 | 15 | E506 | 422 | `{"error":"E506","mensaje":"límite excedido"}` | #2572 |
 | 16 | E507 | 422 | `{"error":"E507","mensaje":"saldo insuficiente"}` | #2603 |
 
@@ -136,6 +149,7 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | ID | Comportamiento | Evidencia | Confianza |
 |---|---|---|---|
 | CD-01 | Hasta las 11:45 no hubo diferencias con la versión de la mañana: los 20 ejemplos, grabados en la mañana, se reproducen idénticos en el reemplazo, que fue construido con datos de 11:00 a 11:45. | replay de ej.1–20 y del log: 2671/2671 pasos idénticos | confirmado |
+| CD-03 | Regresión de las 13:08: volví a mandar al original 211 requests de las secuencias de comportamiento (ejemplos y e1–e11). Las 211 respondieron igual que a las 11:00–11:45. | #2661–#2871 | confirmado |
 | CD-02 | Está anunciado un incidente a las 15:30. Plan de detección: volver a correr las secuencias del log contra el original (`replay.py` apuntando al original con el token personal) y comparar con lo grabado. Cada diferencia se anota aquí con hora, ids nuevos y cambio. | (pendiente) | — |
 
 ## 7. Riesgos
@@ -149,4 +163,5 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | RI-05 | La `sugerencia` de E301 (CM-02) revela los comandos internos a quien adivine. | Quitarla en producción o mostrarla solo con un modo debug. |
 | RI-06 | Los depósitos no tienen límite salvo 10 dígitos (CM-D1), y ALTA no valida el nombre (CM-A2). | Límites de depósito y validación del nombre (longitud, caracteres). |
 | RI-07 | Rarezas de contrato: `recieved`, `cuentaId` vs `cuenta_id`, el espacio final en E301 y la anulación repetida que da 200 con `ok:false`. | Versionar la API (v2) con nombres coherentes y mantener v1 por compatibilidad. |
+| RI-09 | **Comando oculto `HALT`** (CM-H3): cualquier cliente con token puede detener el servicio. La "confirmación" es solo mandar `1`. | Quitarlo de la API pública. Si hace falta, moverlo a un endpoint de administración con otra credencial y doble confirmación (un token de un solo uso). |
 | RI-08 | `m` sin límite de longitud (IN-11): riesgo de abuso de memoria y CPU. | Rechazar cuerpos de más de N KB con 413. |
