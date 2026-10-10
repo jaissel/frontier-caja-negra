@@ -2,7 +2,7 @@
 import sys
 
 from control import firmar
-from enviar import crudo, mostrar, msg, reset, HEADERS
+from enviar import crudo, mostrar, msg, reset, HEADERS  # noqa
 
 
 def f(seq, cuerpo, hip):
@@ -197,6 +197,84 @@ def lote_limites():
     f(S, "CONSULTA;AC-0001", "saldo acumulado tras montos grandes")
     for cmd in ["CONSU", "CONSULTAXYZ", "CONSULTAXY", "ANU", "AN", "PI", "P", "ABCD", "AL", "TRANSF", "DEPOS"]:
         f(S, f"{cmd};AC-0001", f"umbral de sugerencia E301: {cmd}")
+
+
+def lote_v2_limite():
+    """Búsqueda binaria del nuevo límite de TRANSFER (reset por intento para no activar el bloqueo)."""
+    lo, hi = 1, 100000  # lo pasa, hi falla
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        reset(); S = f"v2lim-{mid}"
+        f(S, "ALTA;Ana", "v2: cuenta origen"); f(S, "ALTA;Beto", "v2: cuenta destino")
+        f(S, "DEPOSITO;AC-0001;9999999999", "v2: fondear origen")
+        l = msg(S, firmar(f"TRANSFER;AC-0001;AC-0002;{mid}"), f"v2 límite: ¿{mid} pasa?")
+        mostrar(l)
+        if l["status"] == 200: lo = mid
+        else: hi = mid
+    print("LIMITE: pasa", lo, "falla", hi)
+
+
+def lote_v2_formato():
+    S = "v2fmt"; reset()
+    f(S, "ALTA;Ana", "AC-0001"); f(S, "ALTA;Beto", "AC-0002")
+    f(S, "CONSULTA;AC-0001", "v2 formato saldo 0")
+    f(S, "DEPOSITO;AC-0001;5", "depósito 5 centavos")
+    f(S, "CONSULTA;AC-0001", "v2 formato: 5 -> 0.05?")
+    f(S, "DEPOSITO;AC-0001;95", "depósito 95")
+    f(S, "CONSULTA;AC-0001", "v2 formato: 100 -> 1.00?")
+    f(S, "TRANSFER;AC-0001;AC-0002;100", "transferir todo")
+    f(S, "ANULA;OP-0001", "anular depósito de 5 -> saldo -5")
+    f(S, "CONSULTA;AC-0001", "v2 formato negativo chico: -0.05?")
+    f(S, "DEPOSITO;AC-0002;9999999999", "depósito máximo")
+    f(S, "CONSULTA;AC-0002", "v2 formato número grande")
+    f(S, "DEPOSITO;AC-0002;10000000000", "v2: ¿cambió el máximo del monto?")
+    f(S, "DEPOSITO;AC-0002;0", "v2: monto 0")
+    f(S, "DEPOSITO;AC-0002;10.50", "v2: ¿ahora acepta decimales?")
+    f(S, "DEPOSITO;AC-0002;007", "v2: ceros a la izquierda")
+
+
+def lote_v2_bloqueo():
+    S = "v2blq1"; reset()
+    f(S, "ALTA;Ana", "AC-0001"); f(S, "ALTA;Beto", "AC-0002"); f(S, "ALTA;Caro", "AC-0003")
+    f(S, "DEPOSITO;AC-0001;5000000", "fondear")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "bloqueo: rechazo E506 #1")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "bloqueo: rechazo E506 #2")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "bloqueo: ¿tras 2 E506 una válida pasa?")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "bloqueo: E506 tras un éxito (¿el contador se reinició?)")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "bloqueo: segundo E506 tras éxito")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "bloqueo: tercer E506 seguido (¿bloquea en este?)")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "bloqueo: válida tras 3 E506")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "bloqueo: intentos sube")
+    f(S, "CONSULTA;AC-0001", "bloqueo: ¿CONSULTA de cuenta bloqueada?")
+    f(S, "DEPOSITO;AC-0001;10", "bloqueo: ¿DEPOSITO a cuenta bloqueada?")
+    f(S, "TRANSFER;AC-0002;AC-0001;10", "bloqueo: ¿transferir HACIA la bloqueada?")
+    f(S, "ANULA;OP-0001", "bloqueo: ¿ANULA de una operación de la bloqueada?")
+    f(S, "TRANSFER;AC-0001;AC-0001;10", "bloqueo vs E304")
+    f(S, "TRANSFER;AC-0001;AC-0002;-1", "bloqueo vs E303")
+    f(S, "TRANSFER;AC-0001;AC-0099;10", "bloqueo vs E401 destino")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "bloqueo vs E506")
+    f(S, "TRANSFER;AC-0003;AC-0002;10", "otra cuenta sin saldo no bloqueada: E507")
+
+    S = "v2blq2"; reset()
+    f(S, "ALTA;Ana", "AC-0001"); f(S, "ALTA;Beto", "AC-0002")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "bloqueo por E507 #1")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "bloqueo por E507 #2")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "bloqueo por E507 #3")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "¿E507 también bloquea?")
+    f(S, "TRANSFER;AC-0001;AC-0002;abc", "E303 #1")
+    f(S, "DEPOSITO;AC-0001;1000", "fondear")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "¿pasa tras E507s + depósito?")
+
+    S = "v2blq3"; reset()
+    f(S, "ALTA;Ana", "AC-0001"); f(S, "ALTA;Beto", "AC-0002")
+    f(S, "DEPOSITO;AC-0001;5000000", "fondear")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "E506 #1")
+    f(S, "TRANSFER;AC-0001;AC-0002;-5", "E303 en medio: ¿rompe la racha?")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "E506 #2")
+    f(S, "TRANSFER;AC-0001;AC-0002;999999", "E506 #3 (¿bloquea con racha rota?)")
+    f(S, "TRANSFER;AC-0001;AC-0002;10", "estado tras eso")
+    f(S, "TRANSFER;AC-0002;AC-0001;999999", "E506 desde la otra cuenta (¿contador por cuenta?)")
+    f(S, "TRANSFER;AC-0002;AC-0001;5", "otra cuenta sigue operando")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from control import control
 
 TOKEN = os.environ.get("TOKEN_EQUIPO", "").strip()
+# Versión del comportamiento a imitar. El original pasó a v2 a las 15:30 (ticket FR-0153).
+VERSION = int(os.environ.get("VERSION", "2"))
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -35,6 +37,7 @@ ERRORES = {
     "E404": (404, "ruta desconocida"),
     "E506": (422, "límite excedido"),
     "E507": (422, "saldo insuficiente"),
+    "E510": (423, "cuenta bloqueada"),
     "E520": (409, "operación destructiva: detiene el servicio; reenvía con confirmación"),
     "E599": (503, "service halted"),
 }
@@ -42,7 +45,8 @@ ERRORES = {
 # Comandos y cuántos argumentos llevan (sin contar el comando ni el control)
 # El orden importa: en un empate de la sugerencia gana el primero (ALT -> ALTA, no HALT)
 ARIDAD = {"PING": 0, "ALTA": 1, "CONSULTA": 1, "DEPOSITO": 2, "TRANSFER": 3, "ANULA": 1, "HALT": 1}
-LIMITE_TRANSFER = 100000
+LIMITE_TRANSFER = 100000 if VERSION == 1 else 50000   # v2: bajó a 50000
+RECHAZOS_PARA_BLOQUEO = 3                               # v2: 3 rechazos E506/E507 seguidos bloquean
 MONTO_OK = re.compile(r"[1-9][0-9]{0,9}")   # entero positivo, sin ceros a la izquierda, hasta 10 dígitos
 CONTROL_OK = re.compile(r"[0-9]{1,2}")
 
@@ -57,6 +61,9 @@ class Estado:
         self.n_cuentas = 0
         self.n_ops = 0
         self.detenido = False   # HALT;1 detiene el servicio hasta el próximo reset
+        # v2: por cuenta de origen
+        self.racha = {}         # rechazos de negocio seguidos (E506/E507)
+        self.intentos = {}      # cuenta bloqueada -> intentos hechos mientras está bloqueada
 
 
 estado = Estado()
@@ -87,6 +94,15 @@ def sugerencia(cmd):
     return mejor if distancia(cmd, mejor) <= 2 else None
 
 
+def formato_saldo(centavos):
+    """v1: entero tal cual. v2: string en pesos con 2 decimales ("0.05", "-30.00")."""
+    if VERSION == 1:
+        return centavos
+    signo = "-" if centavos < 0 else ""
+    c = abs(centavos)
+    return f"{signo}{c // 100}.{c % 100:02d}"
+
+
 def nueva_op(**datos):
     estado.n_ops += 1
     op_id = f"OP-{estado.n_ops:04d}"
@@ -105,7 +121,7 @@ def cmd_alta(nombre):
 def cmd_consulta(cuenta):
     if cuenta not in estado.cuentas:
         return error("E401")
-    return ok({"cuenta_id": cuenta, "saldo": estado.cuentas[cuenta]})
+    return ok({"cuenta_id": cuenta, "saldo": formato_saldo(estado.cuentas[cuenta])})
 
 
 def cmd_deposito(cuenta, monto):
@@ -115,6 +131,9 @@ def cmd_deposito(cuenta, monto):
         return error("E401")
     monto = int(monto)
     estado.cuentas[cuenta] += monto
+    # v2: cualquier depósito a la cuenta la desbloquea y reinicia su racha de rechazos
+    estado.racha.pop(cuenta, None)
+    estado.intentos.pop(cuenta, None)
     return nueva_op(tipo="DEPOSITO", monto=monto, destino=cuenta)
 
 
@@ -126,13 +145,26 @@ def cmd_transfer(origen, destino, monto):
     if origen not in estado.cuentas or destino not in estado.cuentas:
         return error("E401")
     monto = int(monto)
+    if VERSION >= 2 and origen in estado.intentos:
+        estado.intentos[origen] += 1
+        return error("E510", intentos=estado.intentos[origen])
     if monto > LIMITE_TRANSFER:
-        return error("E506")
+        return rechazo(origen, "E506")
     if estado.cuentas[origen] < monto:
-        return error("E507")
+        return rechazo(origen, "E507")
+    estado.racha.pop(origen, None)  # una transferencia exitosa corta la racha
     estado.cuentas[origen] -= monto
     estado.cuentas[destino] += monto
     return nueva_op(tipo="TRANSFER", monto=monto, origen=origen, destino=destino)
+
+
+def rechazo(origen, codigo):
+    """v2: el 3er rechazo de negocio seguido responde normal y deja la cuenta bloqueada."""
+    if VERSION >= 2:
+        estado.racha[origen] = estado.racha.get(origen, 0) + 1
+        if estado.racha[origen] >= RECHAZOS_PARA_BLOQUEO:
+            estado.intentos[origen] = 0
+    return error(codigo)
 
 
 def cmd_anula(op_id):

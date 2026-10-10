@@ -4,6 +4,8 @@ Autora: Jaissel Nicol Pérez Marten · Frontier BOG/26 · 10 oct 2026
 Evidencia: los números `#N` son el campo `id` de `experimentos.jsonl`. `ej.N` es la línea N de `pruebas/ejemplos.jsonl`.
 Confianza: **confirmado** (lo probé y se repite), **probable** (lo vi una vez o lo infiero), **supuesto** (no lo probé; es lo que hace el reemplazo por defecto).
 
+> **Versión vigente: v2** (desde las 15:30, ticket FR-0153). Las filas marcadas **[v2]** reemplazan el comportamiento v1 indicado. Todo lo demás es igual en las dos versiones (regresión r2: #3224–#3451).
+
 Resumen: un mini core bancario. Recibe mensajes de texto `COMANDO;arg1;…;control` dentro de `{"m": "..."}` por `POST /msg`. El estado (cuentas, saldos y operaciones) es por token y vuelve a cero con `POST /__reset`.
 
 ---
@@ -71,7 +73,8 @@ El comando no distingue mayúsculas (`consulta`, `CONSULTa`, `ping`). Aridad = n
 
 | ID | Comportamiento | Evidencia | Confianza |
 |---|---|---|---|
-| CM-C1 | Responde `200 {"cuenta_id":"AC-0001","saldo":<entero>}`. Ojo: la clave es `cuenta_id`, mientras que ALTA usa `cuentaId`. | #2534, #2550, ej.5 | confirmado |
+| CM-C1 | [v1] Responde `200 {"cuenta_id":"AC-0001","saldo":<entero>}`. Ojo: la clave es `cuenta_id`, mientras que ALTA usa `cuentaId`. | #2534, #2550, ej.5 | confirmado |
+| CM-C1b | **[v2]** El saldo es un **string en pesos con 2 decimales**: los montos se guardan en centavos y se muestran ÷100. Ejemplos: 0 → `"0.00"`, 5 → `"0.05"`, 100 → `"1.00"`, -5 → `"-0.05"`, -3000 → `"-30.00"`. Las demás respuestas no cambian. | #3224, #3270, #3519, #3521, #3523, #3526, #3528 | confirmado |
 | CM-C2 | El id de cuenta debe coincidir exactamente: `ac-0001`, `AC-1` o ` AC-0001` dan `404 E401 "cuenta inexistente"`. | #2593–#2595 | confirmado |
 
 **DEPOSITO** · `DEPOSITO;<cuenta>;<monto>;ctl`
@@ -87,8 +90,15 @@ El comando no distingue mayúsculas (`consulta`, `CONSULTa`, `ping`). Aridad = n
 
 | ID | Comportamiento | Evidencia | Confianza |
 |---|---|---|---|
-| CM-T1 | Orden de validación: monto (E303) → origen = destino (`400 E304 "origen y destino iguales"`) → existencia de ambas cuentas (E401) → límite (E506) → saldo (E507). | #2600, #2657, #2601, #2602, #2573, #2572 | confirmado |
-| CM-T2 | El límite es **por operación**: monto > 100000 da `422 E506 "límite excedido"`, y 100000 exacto pasa. No es acumulado ni por destino. | #2559–#2563, ej.9, ej.10 | confirmado |
+| CM-T1 | Orden de validación: monto (E303) → origen = destino (`400 E304 "origen y destino iguales"`) → existencia de ambas cuentas (E401) → **[v2] cuenta bloqueada (E510)** → límite (E506) → saldo (E507). | #2600, #2657, #2601, #2602, #2573, #2572 | confirmado |
+| CM-T2 | [v1] El límite es **por operación**: monto > 100000 da `422 E506 "límite excedido"`, y 100000 exacto pasa. No es acumulado ni por destino. | #2559–#2563, ej.9, ej.10 | confirmado |
+| CM-T2b | **[v2]** El límite bajó a **50000**: 50000 pasa y 50001 da E506. Sigue siendo por operación. | #3250, #3251, #3456, #3516, búsqueda #3457–#3516 | confirmado |
+| CM-T5 | **[v2] Bloqueo:** 3 rechazos de negocio **seguidos** (E506 o E507, mezclados o no) en TRANSFER desde una cuenta la dejan **bloqueada**. El 3er rechazo responde normal (E506/E507) y bloquea a partir del siguiente. El contador es por cuenta de origen. | #3537–#3543, #3556–#3559, #3594–#3597, #3624–#3629, #3571 | confirmado |
+| CM-T6 | [v2] La racha se reinicia con una transferencia exitosa desde la cuenta o con cualquier depósito a ella. E303, E304 y E401 no cuentan para la racha ni la cortan. | #3539–#3542, #3617–#3621, #3566–#3570, #3624–#3629 | confirmado |
+| CM-T7 | [v2] Toda TRANSFER desde una cuenta bloqueada que pase E303, E304 y E401 responde `423 {"error":"E510","mensaje":"cuenta bloqueada","intentos":N}`, con N = 1, 2, 3… sin máximo. El bloqueo gana sobre E506 y E507. Los errores anteriores no suben N. | #3543, #3544, #3578–#3585, #3598, #3611–#3614 | confirmado |
+| CM-T8 | [v2] El bloqueo no expira con el tiempo (12 s probados). Solo lo levanta un **DEPOSITO a esa cuenta**, de cualquier monto (1 centavo basta). ANULA o un depósito a otra cuenta no lo levantan. CONSULTA, DEPOSITO y ANULA siguen funcionando con la cuenta bloqueada. | #3585–#3587, #3600–#3605, #3545, #3546 | confirmado |
+| CM-T8b | [v2] Una cuenta bloqueada puede recibir transferencias (el bloqueo solo afecta al origen), y recibir una **no** la desbloquea: solo un DEPOSITO lo hace. | #3637–#3639 | confirmado |
+| CM-T9 | [v2] Si la cuenta se vuelve a bloquear después de un desbloqueo, `intentos` empieza de nuevo en 1. | #4314–#4325 | confirmado |
 | CM-T3 | Si el saldo del origen es menor que el monto, responde `422 E507 "saldo insuficiente"`. Se puede transferir el saldo exacto. | #2603–#2605, ej.16 | confirmado |
 | CM-T4 | Si todo está bien, mueve el saldo y responde `200 {"status":"recieved","operacionId":"OP-NNNN"}`. | #2560, #2564, #2565, ej.7 | confirmado |
 
@@ -117,6 +127,7 @@ El comando no distingue mayúsculas (`consulta`, `CONSULTa`, `ping`). Aridad = n
 | ME-02 | Los contadores AC y OP son secuenciales, independientes entre sí y vuelven a 1 con el reset. | #2536–#2542, #2555–#2558 | confirmado |
 | ME-03 | Una operación rechazada no consume número de OP. Anular tampoco: la siguiente operación sigue la secuencia. | #2559, #2560, #2587 | confirmado |
 | ME-05 | Después de `HALT;1`, **todo** `POST /msg` responde `503 E599`, incluidos un JSON roto, PING y los errores de control. `/health` sigue en 200, las rutas inexistentes dan 404 y sin token da 401. Solo `POST /__reset` lo repara. | #2995, #2998–#3004, #2996 | confirmado |
+| ME-06 | [v2] Por cada cuenta se recuerda además la racha de rechazos, si está bloqueada y cuántos intentos lleva bloqueada (CM-T5 a CM-T8). Todo vuelve a cero con `/__reset`. | #3537–#3629 | confirmado |
 | ME-04 | El header `X-Req` es un contador de requests del token que **no** vuelve a cero con el reset (en #2631 vale 2615). Los headers no se comparan, así que el reemplazo no lo replica. | campo `x_req` del log | probable |
 
 ## 5. Errores (orden de evaluación)
@@ -141,6 +152,7 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | 13 | E304 | 400 | `{"error":"E304","mensaje":"origen y destino iguales"}` | #2601, #2602 |
 | 14 | E401 / E402 | 404 | `{"error":"E401","mensaje":"cuenta inexistente"}` / `{"error":"E402","mensaje":"operación inexistente"}` | #2573, #2584 |
 | 14b | E520 / E599 | 409 / 503 | HALT: `{"error":"E520","mensaje":"operación destructiva: detiene el servicio; reenvía con confirmación"}` / `{"error":"E599","mensaje":"service halted"}` | #2927, #2997 |
+| 14c | E510 [v2] | 423 | `{"error":"E510","mensaje":"cuenta bloqueada","intentos":N}` (solo TRANSFER desde una cuenta bloqueada) | #3598, #3611–#3614 |
 | 15 | E506 | 422 | `{"error":"E506","mensaje":"límite excedido"}` | #2572 |
 | 16 | E507 | 422 | `{"error":"E507","mensaje":"saldo insuficiente"}` | #2603 |
 
@@ -150,7 +162,13 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 |---|---|---|---|
 | CD-01 | Hasta las 11:45 no hubo diferencias con la versión de la mañana: los 20 ejemplos, grabados en la mañana, se reproducen idénticos en el reemplazo, que fue construido con datos de 11:00 a 11:45. | replay de ej.1–20 y del log: 2671/2671 pasos idénticos | confirmado |
 | CD-03 | Regresión de las 13:08: volví a mandar al original 211 requests de las secuencias de comportamiento (ejemplos y e1–e11). Las 211 respondieron igual que a las 11:00–11:45. | #2661–#2871 | confirmado |
-| CD-02 | Está anunciado un incidente a las 15:30. Plan de detección: volver a correr las secuencias del log contra el original (`replay.py` apuntando al original con el token personal) y comparar con lo grabado. Cada diferencia se anota aquí con hora, ids nuevos y cambio. | (pendiente) | — |
+| CD-04 | **15:30 · v2 (ticket FR-0153).** Lo detecté repitiendo contra el original 313 requests ya grabados (regresión r2): 34 respuestas cambiaron y todas se explican con **3 cambios**: |  #3224–#3451 | confirmado |
+| CD-04a | Cambio 1 · Formato del saldo en CONSULTA: de entero a string en pesos con 2 decimales (CM-C1b). | #3224, #3240, #3270, #3519–#3528 | confirmado |
+| CD-04b | Cambio 2 · El límite de TRANSFER bajó de 100000 a 50000 (CM-T2b). | #3250, #3293, #3456, #3516 | confirmado |
+| CD-04c | Cambio 3 · Bloqueo de la cuenta de origen tras 3 rechazos seguidos, con E510 y `intentos` (CM-T5 a CM-T8). | #3252, #3253, #3537–#3629 | confirmado |
+| CD-04d | Las otras 279 respuestas de la regresión, incluidos los 20 ejemplos públicos, HALT, los errores y el JSON, quedaron iguales. Los cambios en ANULA de la regresión son consecuencia del cambio 2 (la operación no se creó), no un cambio de ANULA. | #3224–#3451, #3446, #3451 | confirmado |
+| CD-05 | Validación del reemplazo v2 con 2 sets aleatorios nuevos con la forma del set oculto (40 de 1 request, 45 de 2–5 y 15 de 6–12), grabados contra el original a las 16:49: 200/200 tests y 674/674 respuestas idénticas. | #3640–#4313 | confirmado |
+| CD-02 | Método de detección: `regresion.py` repite contra el original secuencias ya grabadas y muestra cada diferencia. Cada cambio se aisló después con experimentos dirigidos (búsqueda binaria del límite, secuencias de bloqueo). | regresion.py, #3457–#3629 | confirmado |
 
 ## 7. Riesgos
 
@@ -164,4 +182,6 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | RI-06 | Los depósitos no tienen límite salvo 10 dígitos (CM-D1), y ALTA no valida el nombre (CM-A2). | Límites de depósito y validación del nombre (longitud, caracteres). |
 | RI-07 | Rarezas de contrato: `recieved`, `cuentaId` vs `cuenta_id`, el espacio final en E301 y la anulación repetida que da 200 con `ok:false`. | Versionar la API (v2) con nombres coherentes y mantener v1 por compatibilidad. |
 | RI-09 | **Comando oculto `HALT`** (CM-H3): cualquier cliente con token puede detener el servicio. La "confirmación" es solo mandar `1`. | Quitarlo de la API pública. Si hace falta, moverlo a un endpoint de administración con otra credencial y doble confirmación (un token de un solo uso). |
+| RI-10 | [v2] El bloqueo se levanta con un depósito de 1 centavo (CM-T8): no protege nada, cualquiera lo desbloquea. | Desbloqueo solo por un canal verificado (soporte, segundo factor) o con expiración temporal. |
+| RI-11 | [v2] El formato del saldo cambió de número a string sin versionar la API (CM-C1b): rompe a los clientes existentes. | Publicar la v2 en una ruta o header de versión y mantener la v1 durante una migración. |
 | RI-08 | `m` sin límite de longitud (IN-11): riesgo de abuso de memoria y CPU. | Rechazar cuerpos de más de N KB con 413. |

@@ -1,8 +1,8 @@
 """Repite las secuencias grabadas del original contra el clon y compara (misma regla que el set).
 
 Uso:
-    python replay.py http://127.0.0.1:8000            # todo el log + ejemplos
-    python replay.py https://mi-clon.up.railway.app
+    python replay.py <url>          # secuencias de la versión 2 (después de las 15:30)
+    python replay.py <url> v1       # secuencias de la versión 1 (ejemplos + log de la mañana)
 """
 import json
 import os
@@ -14,6 +14,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 BASE = sys.argv[1].rstrip("/")
+VERSION = sys.argv[2] if len(sys.argv) > 2 else "v2"
+
+
+
+def es_v2(seq):
+    return seq.startswith(("r2-", "v2", "fz"))
+
+
 TOKEN = os.environ["TOKEN_EQUIPO"].strip()
 H = {"Authorization": f"Bearer {TOKEN}"}
 cli = httpx.Client(timeout=10)
@@ -52,6 +60,8 @@ def main():
     pasos = iguales = tests = tests_ok = 0
     fallos = []
     for seq, lineas in secuencias().items():
+        if es_v2(seq) != (VERSION == "v2"):
+            continue
         cli.post(BASE + "/__reset", headers=H)
         todo_ok = True
         for l in lineas:
