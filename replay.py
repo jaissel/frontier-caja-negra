@@ -19,7 +19,7 @@ VERSION = sys.argv[2] if len(sys.argv) > 2 else "v2"
 
 
 def es_v2(seq):
-    return seq.startswith(("r2-", "v2", "fz"))
+    return seq.startswith(("r2-", "v2", "fz", "llm"))
 
 
 TOKEN = os.environ["TOKEN_EQUIPO"].strip()
@@ -30,6 +30,17 @@ cli = httpx.Client(timeout=10)
 def cargar(ruta):
     with open(ruta, encoding="utf-8") as f:
         return [json.loads(l) for l in f if l.strip()]
+
+
+def es_crudo(l):
+    """El log guarda igual un cuerpo crudo y un string JSON: si el texto es un objeto JSON o dio E100, fue crudo."""
+    req = l["request"]
+    if isinstance(l["response"], dict) and l["response"].get("error") in ("E100", "E101"):
+        return True
+    try:
+        return isinstance(json.loads(req), (dict, list))
+    except ValueError:
+        return False
 
 
 def secuencias():
@@ -50,7 +61,7 @@ def enviar(l):
     if isinstance(req, dict) or isinstance(req, list):
         return cli.request(metodo, BASE + ruta, headers=H, json=req)
     if isinstance(req, str):
-        if isinstance(l["response"], dict) and l["response"].get("error") == "E100":
+        if es_crudo(l):
             return cli.request(metodo, BASE + ruta, headers=H, content=req.encode())
         return cli.request(metodo, BASE + ruta, headers=H, json=req)
     return cli.request(metodo, BASE + ruta, headers=H)

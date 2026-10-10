@@ -24,7 +24,8 @@ Resumen: un mini core bancario. Recibe mensajes de texto `COMANDO;arg1;…;contr
 | IN-08 | El cuerpo de `/msg` debe ser un JSON válido. Si está vacío, no es JSON o está roto: `400 E100 "json inválido"`. | #2479–#2481 | confirmado |
 | IN-09 | El JSON debe ser un objeto con un campo `m` de tipo string. Si falta `m`, es número, es `null`, el cuerpo es un array o es un string JSON suelto: `400 E102 "falta m"`. | #2482–#2484, #2486, #2491 | confirmado |
 | IN-10 | Los campos extra del objeto se ignoran. | #2487 | confirmado |
-| IN-11 | No se observó un límite de longitud para `m`: se aceptaron 300 y 2000 caracteres. | #2489, #2490 | probable |
+| IN-11 | El cuerpo de `POST /msg` puede medir hasta **8192 bytes**. Con 8193 bytes o más responde `413 {"error":"E101","mensaje":"cuerpo demasiado grande"}`. Se cuentan bytes, no caracteres: 5000 `é` son 10013 bytes y dan E101. `/__reset` ignora el cuerpo. | #4341–#4345, #4364, #4349, #4326–#4339 | confirmado |
+| IN-11b | Orden de E101: ruta (E404) → token (E001) → servicio detenido (E599) → **tamaño (E101)** → JSON (E100). | #4346–#4348, #4351 | confirmado |
 | IN-13 | El JSON se lee de forma estricta: un BOM al inicio da E100 y `NaN` da E100. Con claves duplicadas gana la última. El `Content-Type` no importa: un `text/plain` con JSON válido funciona. La clave debe ser `m` en minúscula (`M` da E102), y `null` o un número como cuerpo dan E102. | #3108, #3115, #3109, #3107, #3110, #3113, #3114 | confirmado |
 | IN-14 | `HEAD` y `OPTIONS` dan 404. Los parámetros de la URL (`?x=1`) se ignoran. `Bearer` con doble espacio da 401. | #3102–#3106 | confirmado |
 | IN-12 | Cada token tiene un estado propio. | README; mi token siempre empezó desde cero tras el reset | probable |
@@ -139,6 +140,7 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | 1 | E404 | 404 | `{"error":"E404","mensaje":"ruta desconocida"}` | #2469–#2478 |
 | 2 | E001 | 401 | `{"error":"E001","mensaje":"no autorizado"}` | #2463–#2468 |
 | 2b | E599 | 503 | `{"error":"E599","mensaje":"service halted"}` (solo si el servicio está detenido por HALT) | #3001–#3004 |
+| 2c | E101 | 413 | `{"error":"E101","mensaje":"cuerpo demasiado grande"}` (cuerpo de más de 8192 bytes) | #4345, #4348 |
 | 3 | E100 | 400 | `{"error":"E100","mensaje":"json inválido"}` | #2479–#2481 |
 | 4 | E102 | 400 | `{"error":"E102","mensaje":"falta m"}` | #2482–#2486 |
 | 5 | E103 | 400 | `{"error":"E103","mensaje":"falta control"}` | #4, #2494 |
@@ -168,6 +170,8 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | CD-04c | Cambio 3 · Bloqueo de la cuenta de origen tras 3 rechazos seguidos, con E510 y `intentos` (CM-T5 a CM-T8). | #3252, #3253, #3537–#3629 | confirmado |
 | CD-04d | Las otras 279 respuestas de la regresión, incluidos los 20 ejemplos públicos, HALT, los errores y el JSON, quedaron iguales. Los cambios en ANULA de la regresión son consecuencia del cambio 2 (la operación no se creó), no un cambio de ANULA. | #3224–#3451, #3446, #3451 | confirmado |
 | CD-05 | Validación del reemplazo v2 con 2 sets aleatorios nuevos con la forma del set oculto (40 de 1 request, 45 de 2–5 y 15 de 6–12), grabados contra el original a las 16:49: 200/200 tests y 674/674 respuestas idénticas. | #3640–#4313 | confirmado |
+| CD-06 | Tercer set aleatorio, enfocado en estado (30 secuencias de 8–12 con bloqueos, ANULA, HALT y cuerpos de ~8 KB): 30/30 y 295/295 idénticos contra el original v2. | #4365–#4659 | confirmado |
+| CD-07 | Explorador asistido por LLM (`llm_tests.py`, OpenRouter): el modelo leyó esta especificación y propuso 20 casos difíciles, cada uno con su hipótesis (en el log aparecen como `[LLM] …`). Contra el original v2: 20/20 casos y 117/117 respuestas idénticas al reemplazo. | #4660–#4776 | confirmado |
 | CD-02 | Método de detección: `regresion.py` repite contra el original secuencias ya grabadas y muestra cada diferencia. Cada cambio se aisló después con experimentos dirigidos (búsqueda binaria del límite, secuencias de bloqueo). | regresion.py, #3457–#3629 | confirmado |
 
 ## 7. Riesgos
@@ -184,4 +188,4 @@ Para cada request se aplica el **primer** error de esta lista que corresponda:
 | RI-09 | **Comando oculto `HALT`** (CM-H3): cualquier cliente con token puede detener el servicio. La "confirmación" es solo mandar `1`. | Quitarlo de la API pública. Si hace falta, moverlo a un endpoint de administración con otra credencial y doble confirmación (un token de un solo uso). |
 | RI-10 | [v2] El bloqueo se levanta con un depósito de 1 centavo (CM-T8): no protege nada, cualquiera lo desbloquea. | Desbloqueo solo por un canal verificado (soporte, segundo factor) o con expiración temporal. |
 | RI-11 | [v2] El formato del saldo cambió de número a string sin versionar la API (CM-C1b): rompe a los clientes existentes. | Publicar la v2 en una ruta o header de versión y mantener la v1 durante una migración. |
-| RI-08 | `m` sin límite de longitud (IN-11): riesgo de abuso de memoria y CPU. | Rechazar cuerpos de más de N KB con 413. |
+| RI-08 | El límite de 8 KB (IN-11) existe, pero no está documentado y responde con un código propio (E101). | Documentarlo en el contrato y mandar `Retry`/tamaño máximo en la respuesta. |

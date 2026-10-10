@@ -23,6 +23,7 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 ERRORES = {
     "E001": (401, "no autorizado"),
     "E100": (400, "json inválido"),
+    "E101": (413, "cuerpo demasiado grande"),
     "E102": (400, "falta m"),
     "E103": (400, "falta control"),
     "E104": (400, "segmento vacío"),
@@ -49,6 +50,8 @@ LIMITE_TRANSFER = 100000 if VERSION == 1 else 50000   # v2: bajó a 50000
 RECHAZOS_PARA_BLOQUEO = 3                               # v2: 3 rechazos E506/E507 seguidos bloquean
 MONTO_OK = re.compile(r"[1-9][0-9]{0,9}")   # entero positivo, sin ceros a la izquierda, hasta 10 dígitos
 CONTROL_OK = re.compile(r"[0-9]{1,2}")
+
+MAX_CUERPO = 8192   # bytes; 8193 o más -> 413 E101
 
 RUTAS = {("GET", "/health"), ("POST", "/__reset"), ("POST", "/msg")}
 
@@ -243,6 +246,8 @@ async def todo(ruta: str, request: Request):
         return error("E599")  # detenido: todo /msg da 503, incluso con JSON roto
 
     crudo = await request.body()
+    if len(crudo) > MAX_CUERPO:
+        return error("E101")
     try:
         # Igual que el original: BOM inicial, NaN e Infinity son JSON inválido
         cuerpo = json.loads(crudo.decode("utf-8"), parse_constant=_sin_constantes)

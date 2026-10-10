@@ -6,7 +6,7 @@ import json
 import sys
 
 from enviar import crudo, reset
-from replay import secuencias
+from replay import es_crudo, secuencias
 
 etiqueta = sys.argv[1]
 pedidas = sys.argv[2:] or ["ejemplos"] + [f"e{i}" for i in range(1, 12)]
@@ -27,7 +27,7 @@ for seq in pedidas:
         if isinstance(req, (dict, list)):
             r = crudo(metodo, ruta, nueva, hip, json_body=req)
         elif isinstance(req, str):
-            if isinstance(l["response"], dict) and l["response"].get("error") == "E100":
+            if es_crudo(l):
                 r = crudo(metodo, ruta, nueva, hip, cuerpo=req.encode())
             else:
                 r = crudo(metodo, ruta, nueva, hip, json_body=req)
